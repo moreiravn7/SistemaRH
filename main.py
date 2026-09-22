@@ -167,7 +167,21 @@ def criar_funcionario():
 
     try:
         id_funcionario = int(input("ID do funcionário: "))
+
+        # Não permite sobrescrever um funcionário existente sem querer
+        existente = supabase.table("funcionarios").select("*").eq("id_funcionario", id_funcionario).execute()
+        if existente.data:
+            print(f"❌ Já existe um funcionário com ID {id_funcionario} ({existente.data[0]['nome']}).")
+            print("Use a opção 4 (Atualizar funcionário) para alterá-lo.")
+            pausar()
+            return
+
         id_departamento = int(input("ID do departamento: "))
+        if id_departamento not in dept_map:
+            print(f"❌ Departamento ID {id_departamento} não existe. Cadastre-o primeiro (opção 8).")
+            pausar()
+            return
+
         nome = input("Nome completo: ").strip()
         cpf = input("CPF (ex: 000.000.000-00): ").strip()
         cargo = input("Cargo / Função: ").strip()
@@ -254,10 +268,11 @@ def listar_dependentes():
     limpar_tela()
     resposta = supabase.table("dependentes").select("*").execute()
     func_map = obter_mapa_funcionarios()
+    dept_map = obter_mapa_departamentos()
 
-    print("=" * 95)
-    print("                    LISTAGEM COMPLETA DE DEPENDENTES")
-    print("=" * 95)
+    print("=" * 110)
+    print("                         LISTAGEM COMPLETA DE DEPENDENTES")
+    print("=" * 110)
 
     if not resposta.data:
         print("Nenhum dependente cadastrado.")
@@ -265,21 +280,33 @@ def listar_dependentes():
         return
 
     print(f"Total de dependentes cadastrados: {len(resposta.data)}\n")
-    print(f"{'ID':<6}{'NOME DO DEPENDENTE':<26}{'PARENTESCO':<16}{'RESPONSÁVEL (TITULAR)':<32}{'ID TIT.'}")
-    print("-" * 95)
+    print(f"{'ID':<6}{'NOME DO DEPENDENTE':<26}{'PARENTESCO':<12}{'NASCIMENTO':<12}"
+          f"{'RESPONSÁVEL (TITULAR)':<30}{'DEPTO. TITULAR':<20}")
+    print("-" * 110)
 
-    for d in sorted(resposta.data, key=lambda x: x.get("id_dependente", 0)):
+    def chave_ordenacao(d):
+        func = func_map.get(d.get("id_funcionario")) or {}
+        return (func.get("nome", "ZZZ"), d.get("nome", ""))
+
+    for d in sorted(resposta.data, key=chave_ordenacao):
         dep_id = d.get("id_dependente", "-")
         nome_dep = d.get("nome", "-")
         parentesco = d.get("parentesco", "-")
+        nascimento = d.get("data_nascimento") or "-"
         id_titular = d.get("id_funcionario")
 
         func_titular = func_map.get(id_titular)
-        nome_titular = func_titular["nome"] if func_titular else f"[Titular ID {id_titular} não encontrado]"
+        if func_titular:
+            nome_titular = func_titular["nome"]
+            dept_titular = dept_map.get(func_titular.get("id_departamento"), "Não atribuído")
+        else:
+            nome_titular = f"[Titular ID {id_titular} não encontrado]"
+            dept_titular = "-"
 
-        print(f"{dep_id:<6}{nome_dep[:24]:<26}{parentesco[:14]:<16}{nome_titular[:30]:<32}{str(id_titular):<6}")
+        print(f"{dep_id:<6}{nome_dep[:24]:<26}{parentesco[:10]:<12}{nascimento:<12}"
+              f"{nome_titular[:28]:<30}{dept_titular[:18]:<20}")
 
-    print("=" * 95)
+    print("=" * 110)
     pausar()
 
 
@@ -364,6 +391,65 @@ def listar_pagamentos():
     pausar()
 
 
+def buscar_funcionario():
+    limpar_tela()
+    print("=" * 95)
+    print("                      BUSCAR FUNCIONÁRIO POR NOME")
+    print("=" * 95)
+
+    termo = input("Digite parte do nome (ou Enter para voltar): ").strip()
+    if not termo:
+        return
+
+    dept_map = obter_mapa_departamentos()
+    resposta = supabase.table("funcionarios").select("*").execute()
+    encontrados = [f for f in resposta.data if termo.lower() in f.get("nome", "").lower()]
+
+    print(f"\n{len(encontrados)} resultado(s) para '{termo}':\n")
+    print(f"{'ID':<6}{'NOME':<28}{'DEPARTAMENTO':<22}{'CARGO':<28}{'SALÁRIO':>10}")
+    print("-" * 95)
+    for f in sorted(encontrados, key=lambda x: x.get("nome", "")):
+        dept_nome = dept_map.get(f.get("id_departamento"), "Não atribuído")
+        print(f"{f.get('id_funcionario', '-'):<6}{f.get('nome', '-')[:26]:<28}"
+              f"{dept_nome[:20]:<22}{f.get('cargo', '-')[:26]:<28}R$ {f.get('salario', 0.0):>8.2f}")
+
+    print("=" * 95)
+    pausar()
+
+
+def relatorio_por_departamento():
+    limpar_tela()
+    print("=" * 80)
+    print("           RELATÓRIO: COLABORADORES E FOLHA POR DEPARTAMENTO")
+    print("=" * 80)
+
+    dept_resp = supabase.table("departamentos").select("*").execute()
+    func_resp = supabase.table("funcionarios").select("*").execute()
+
+    funcs_por_dep = {}
+    for f in func_resp.data:
+        funcs_por_dep.setdefault(f.get("id_departamento"), []).append(f)
+
+    print(f"\n{'DEPARTAMENTO':<30}{'QTD':>6}{'SAL. MÉDIO':>14}{'FOLHA TOTAL':>16}")
+    print("-" * 80)
+
+    total_geral_qtd = 0
+    total_geral_folha = 0.0
+    for dep in sorted(dept_resp.data, key=lambda d: d.get("nome", "")):
+        funcs = funcs_por_dep.get(dep["id_departamento"], [])
+        qtd = len(funcs)
+        folha = sum(f.get("salario", 0.0) for f in funcs)
+        medio = (folha / qtd) if qtd else 0.0
+        total_geral_qtd += qtd
+        total_geral_folha += folha
+        print(f"{dep['nome'][:28]:<30}{qtd:>6}R$ {medio:>10.2f}R$ {folha:>12.2f}")
+
+    print("-" * 80)
+    print(f"{'TOTAL GERAL':<30}{total_geral_qtd:>6}{'':>14}R$ {total_geral_folha:>12.2f}")
+    print("=" * 80)
+    pausar()
+
+
 def menu_principal():
     while True:
         limpar_tela()
@@ -380,6 +466,8 @@ def menu_principal():
   7 - Listar departamentos
   8 - Cadastrar departamento
   9 - Ver folha de pagamentos
+ 10 - Buscar funcionário por nome
+ 11 - Relatório por departamento
   0 - Sair
 =================================================""")
 
@@ -403,6 +491,10 @@ def menu_principal():
             cadastrar_departamento()
         elif opcao == "9":
             listar_pagamentos()
+        elif opcao == "10":
+            buscar_funcionario()
+        elif opcao == "11":
+            relatorio_por_departamento()
         elif opcao == "0":
             print("\nSistema encerrado. Até logo! 👋")
             break

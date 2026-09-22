@@ -1,0 +1,3 @@
+# Dependência OPCIONAL: só necessária para usar o Supabase remoto.
+# Sem ela, o sistema funciona normalmente com SQLite local (rh.db).
+supabase>=2.0.0
